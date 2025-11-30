@@ -1,10 +1,3 @@
-# streamlit_app.py
-"""
-Polished, minimal Streamlit UI for Fake News Detector.
-Place next to model.pkl and vectorizer.pkl and run:
-    streamlit run streamlit_app.py
-"""
-
 import os
 import pickle
 import math
@@ -13,7 +6,7 @@ import streamlit as st
 from datetime import datetime
 
 # -------------------------
-# Streamlit page config (first Streamlit call)
+# Streamlit page config
 # -------------------------
 st.set_page_config(page_title="Fake News Detector", layout="centered")
 
@@ -62,14 +55,24 @@ model, vect = load_artifacts()
 # Helpers
 # -------------------------
 def compute_confidence(m, X):
+    """
+    Returns the confidence score (probability) of the PREDICTED class.
+    """
     try:
         if hasattr(m, "predict_proba"):
             p = m.predict_proba(X)[0]
             return float(max(p))
         elif hasattr(m, "decision_function"):
             val = m.decision_function(X)
+            # Handle shape inconsistencies in different sklearn versions
             score = float(val[0]) if (hasattr(val, "__len__") and len(val.shape) == 1) else float(val[0][0])
-            return 1.0 / (1.0 + math.exp(-score))
+            
+            # Sigmoid function gives probability of the Positive Class (Class 1 = REAL)
+            prob_real = 1.0 / (1.0 + math.exp(-score))
+            
+            # If prob_real > 0.5, predicted is REAL, conf is prob_real
+            # If prob_real < 0.5, predicted is FAKE, conf is 1 - prob_real
+            return max(prob_real, 1.0 - prob_real)
     except Exception:
         return None
 
@@ -77,6 +80,8 @@ def predict(text):
     X = vect.transform([text])
     pred = model.predict(X)[0]
     conf = compute_confidence(model, X)
+    
+    # 0 = FAKE, 1 = REAL
     label = "REAL" if int(pred) == 1 else "FAKE"
     return label, conf
 
@@ -96,7 +101,7 @@ def save_test(text, source, gt, pred, conf):
         df.to_csv(TEST_LOG, index=False)
 
 # -------------------------
-# Sidebar controls (keeps main area clean)
+# Sidebar controls
 # -------------------------
 with st.sidebar:
     st.header("Options")
@@ -105,14 +110,18 @@ with st.sidebar:
     auto_save = st.checkbox("Auto save after check", value=False)
     st.markdown("---")
     st.caption("Model loaded: " + (type(model).__name__ if model else "Not found"))
+    
     if st.button("Load latest saved tests"):
         if os.path.exists(TEST_LOG):
-            st.success(f"Found {len(pd.read_csv(TEST_LOG))} saved tests")
+            try:
+                st.success(f"Found {len(pd.read_csv(TEST_LOG))} saved tests")
+            except Exception:
+                st.warning("Could not read log file.")
         else:
             st.info("No saved tests found")
 
 # -------------------------
-# Main UI (minimal)
+# Main UI
 # -------------------------
 st.markdown("<div style='display:flex;align-items:center'><h1 style='margin:0 0.5rem 0 0'>📰 Fake News Detector</h1></div>", unsafe_allow_html=True)
 st.write("Paste an article (headline + 1–2 paragraphs recommended) and click **Check**.")
@@ -144,17 +153,15 @@ with col1:
                     else:
                         st.success("✅ Predicted: REAL")
 
-                # auto save option
                 if auto_save:
                     save_test(text, source, ground_truth, pred_label, conf_val)
                     st.info("Saved test result.")
 
 with col2:
-    # small instructions area (kept minimal)
     st.write("")
     st.caption("Use the sidebar to set Source and Ground truth, or enable Auto save.")
 
-# manual save
+# Manual save button
 if st.button("Save test result", key="save_btn"):
     if not text or not text.strip():
         st.error("Nothing to save.")
@@ -166,6 +173,5 @@ if st.button("Save test result", key="save_btn"):
         save_test(text, source, ground_truth, pred_label, conf_val)
         st.success("Saved test to disk.")
 
-# footer hint
 st.markdown("---")
 st.caption("© Fake News Detector — UI optimized for clean presentation")
