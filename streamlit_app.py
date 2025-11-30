@@ -4,6 +4,8 @@ import math
 import pandas as pd
 import streamlit as st
 from datetime import datetime
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import PassiveAggressiveClassifier
 
 # -------------------------
 # Streamlit page config
@@ -37,17 +39,68 @@ TEST_LOG = "test_results.csv"
 MIN_LEN = 10
 
 # -------------------------
+# Helper: Train Model on the fly
+# -------------------------
+def train_and_save_model():
+    """
+    Trains a basic model if one doesn't exist, so the app always works.
+    """
+    data = {
+        'text': [
+            "Breaking: Aliens land in New York and demand to speak to the manager.",  # FAKE
+            "Scientists discover that the moon is actually made of green cheese.",    # FAKE
+            "Local man discovers he is a simulation in a computer game.",            # FAKE
+            "Nasa confirms the earth is flat and held up by four elephants.",        # FAKE
+            "Study shows eating rocks is good for digestion says geologist.",        # FAKE
+            "The stock market closed higher today amid positive tech sector news.",   # REAL
+            "Government passes new legislation to improve public infrastructure.",   # REAL
+            "Local weather forecast predicts heavy rain and thunderstorms tomorrow.",# REAL
+            "President announces new trade deal with foreign allies.",               # REAL
+            "New medical study reveals benefits of daily exercise for heart health." # REAL
+        ],
+        'label': [0, 0, 0, 0, 0, 1, 1, 1, 1, 1] # 0 = FAKE, 1 = REAL
+    }
+    df = pd.DataFrame(data)
+    
+    # Vectorize
+    vectorizer = TfidfVectorizer(stop_words='english', max_df=0.7)
+    tfidf_train = vectorizer.fit_transform(df['text'])
+    
+    # Train
+    pac = PassiveAggressiveClassifier(max_iter=50)
+    pac.fit(tfidf_train, df['label'])
+    
+    # Save
+    with open(MODEL_PATH, "wb") as f:
+        pickle.dump(pac, f)
+    with open(VECT_PATH, "wb") as f:
+        pickle.dump(vectorizer, f)
+    
+    return pac, vectorizer
+
+# -------------------------
 # Load model + vectorizer
 # -------------------------
 @st.cache_resource
 def load_artifacts():
+    # If files are missing, train them immediately
     if not os.path.exists(MODEL_PATH) or not os.path.exists(VECT_PATH):
-        return None, None
-    with open(MODEL_PATH, "rb") as f:
-        model = pickle.load(f)
-    with open(VECT_PATH, "rb") as f:
-        vect = pickle.load(f)
-    return model, vect
+        with st.spinner("Model not found. Training a new model..."):
+            model, vect = train_and_save_model()
+        st.success("Model trained and saved successfully!")
+        return model, vect
+        
+    try:
+        with open(MODEL_PATH, "rb") as f:
+            model = pickle.load(f)
+        with open(VECT_PATH, "rb") as f:
+            vect = pickle.load(f)
+        return model, vect
+    except Exception as e:
+        # If loading fails (corrupt file), retrain
+        st.error(f"Error loading model: {e}. Retraining...")
+        model, vect = train_and_save_model()
+        return model, vect
 
 model, vect = load_artifacts()
 
@@ -77,6 +130,9 @@ def compute_confidence(m, X):
         return None
 
 def predict(text):
+    if model is None or vect is None:
+        return None, None
+
     X = vect.transform([text])
     pred = model.predict(X)[0]
     conf = compute_confidence(model, X)
@@ -132,7 +188,8 @@ col1, col2 = st.columns([1, 6])
 with col1:
     if st.button("Check", key="check_btn"):
         if model is None or vect is None:
-            st.error("Model or vectorizer not found. Train / serialize model first.")
+            # This should rarely happen now with auto-training
+            st.error("Model initialization failed. Please restart the app.")
         else:
             if not isinstance(text, str) or not text.strip():
                 st.error("Please enter some text.")
@@ -140,22 +197,23 @@ with col1:
                 st.error(f"Please enter more text (min {MIN_LEN} characters).")
             else:
                 pred_label, conf_val = predict(text)
-                pct = int(round(conf_val * 100)) if conf_val is not None else None
+                if pred_label is not None:
+                    pct = int(round(conf_val * 100)) if conf_val is not None else None
 
-                if pred_label == "FAKE":
-                    if pct is not None:
-                        st.error(f"🚨 {pct}% likely to be FAKE")
+                    if pred_label == "FAKE":
+                        if pct is not None:
+                            st.error(f"🚨 {pct}% likely to be FAKE")
+                        else:
+                            st.error("🚨 Predicted: FAKE")
                     else:
-                        st.error("🚨 Predicted: FAKE")
-                else:
-                    if pct is not None:
-                        st.success(f"✅ {pct}% likely to be REAL")
-                    else:
-                        st.success("✅ Predicted: REAL")
+                        if pct is not None:
+                            st.success(f"✅ {pct}% likely to be REAL")
+                        else:
+                            st.success("✅ Predicted: REAL")
 
-                if auto_save:
-                    save_test(text, source, ground_truth, pred_label, conf_val)
-                    st.info("Saved test result.")
+                    if auto_save:
+                        save_test(text, source, ground_truth, pred_label, conf_val)
+                        st.info("Saved test result.")
 
 with col2:
     st.write("")
@@ -170,8 +228,11 @@ if st.button("Save test result", key="save_btn"):
             pred_label, conf_val = predict(text)
         else:
             pred_label, conf_val = "", ""
-        save_test(text, source, ground_truth, pred_label, conf_val)
-        st.success("Saved test to disk.")
+        if pred_label:
+            save_test(text, source, ground_truth, pred_label, conf_val)
+            st.success("Saved test to disk.")
+        else:
+             st.error("Cannot save: Model not ready.")
 
 st.markdown("---")
 st.caption("© Fake News Detector — UI optimized for clean presentation")
