@@ -5,12 +5,35 @@ Place next to model.pkl and vectorizer.pkl and run:
     streamlit run streamlit_app.py
 """
 
-import os
 import pickle
-import math
-import pandas as pd
 import streamlit as st
-from datetime import datetime
+from huggingface_hub import hf_hub_download
+
+# --------------------------
+# Download from Hugging Face
+# --------------------------
+@st.cache_resource
+def load_artifacts():
+    model_path = hf_hub_download(
+        repo_id="naniganadi3/fakenews-model",
+        filename="model.pkl"
+    )
+    
+    vectorizer_path = hf_hub_download(
+        repo_id="naniganadi3/fakenews-model",
+        filename="vocab.pkl"
+    )
+
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+
+    with open(vectorizer_path, "rb") as f:
+        vectorizer = pickle.load(f)
+
+    return model, vectorizer
+
+model, vectorizer = load_artifacts()
+
 
 # -------------------------
 # Streamlit page config (first Streamlit call)
